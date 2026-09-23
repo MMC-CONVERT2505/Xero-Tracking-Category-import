@@ -1,0 +1,37 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+
+body {
+  @apply bg-canvas text-ink-900 antialiased;
+  font-feature-settings: 'tnum' 1; /* tabular figures for stats */
+}
+
+::selection { @apply bg-brand-100; }
+
+/* Visible keyboard focus everywhere - never suppressed. */
+:focus-visible {
+  outline: 2px solid theme('colors.brand.500');
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #EDEFF5 25%, #F6F7FB 37%, #EDEFF5 63%);
+  background-size: 800px 100%;
+  @apply animate-shimmer rounded-md;
+}

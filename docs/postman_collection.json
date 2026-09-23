@@ -1,0 +1,68 @@
+{
+  "info": {
+    "name": "Xero Tracking Options Import Tool",
+    "description": "Session-cookie based - run 'Connect to Xero' in a real browser first (Postman can't complete an interactive OAuth redirect), then copy the xti.sid cookie into this collection's cookie jar for the rest of the requests. The Tracking Category is auto-detected from the uploaded file - there is no trackingCategoryId to pass to /validate.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:7005" },
+    { "key": "importId", "value": "" },
+    { "key": "trackingCategoryId", "value": "" }
+  ],
+  "item": [
+    { "name": "1. Connect to Xero (open in browser, not Postman)", "request": { "method": "GET", "url": "{{baseUrl}}/auth/xero" } },
+    { "name": "2. Session status", "request": { "method": "GET", "url": "{{baseUrl}}/auth/xero/session" } },
+    { "name": "3. List connections (orgs available)", "request": { "method": "GET", "url": "{{baseUrl}}/api/xero/connections" } },
+    {
+      "name": "4. Select organisation",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/xero/select-connection",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"tenantId\": \"PASTE_FROM_CONNECTIONS_RESPONSE\"\n}" }
+      }
+    },
+    { "name": "5. Current connection", "request": { "method": "GET", "url": "{{baseUrl}}/api/xero/current-connection" } },
+    { "name": "6. Dashboard summary", "request": { "method": "GET", "url": "{{baseUrl}}/api/xero/dashboard" } },
+    { "name": "7. List tracking categories", "request": { "method": "GET", "url": "{{baseUrl}}/api/xero/tracking-categories" } },
+    { "name": "8. Get category options", "request": { "method": "GET", "url": "{{baseUrl}}/api/xero/tracking-categories/{{trackingCategoryId}}/options" } },
+    {
+      "name": "9. Validate upload (auto-detects category from first column of each sheet)",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/tracking/import/validate",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "file", "type": "file", "src": "" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "10. Resolve category (\"Continue Import\" - finds-or-creates one NOT_FOUND category)",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/tracking/import/resolve-category",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"uploadToken\": \"PASTE_FROM_VALIDATE_RESPONSE\",\n  \"key\": \"PASTE_GROUP_KEY_FROM_VALIDATE_RESPONSE\"\n}" }
+      }
+    },
+    {
+      "name": "11. Start import (creates one job per resolved/FOUND category)",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/tracking/import/start",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"uploadToken\": \"PASTE_FROM_VALIDATE_RESPONSE\"\n}" }
+      }
+    },
+    { "name": "12. List imports", "request": { "method": "GET", "url": "{{baseUrl}}/api/tracking/import" } },
+    { "name": "13. Get import status", "request": { "method": "GET", "url": "{{baseUrl}}/api/tracking/import/{{importId}}/status" } },
+    { "name": "14. Get error report", "request": { "method": "GET", "url": "{{baseUrl}}/api/tracking/import/{{importId}}/errors" } },
+    { "name": "15. Retry failed options", "request": { "method": "POST", "url": "{{baseUrl}}/api/tracking/import/{{importId}}/retry-failed" } },
+    { "name": "16. Resume import", "request": { "method": "POST", "url": "{{baseUrl}}/api/tracking/import/{{importId}}/resume" } },
+    { "name": "17. Cancel import", "request": { "method": "POST", "url": "{{baseUrl}}/api/tracking/import/{{importId}}/cancel" } },
+    { "name": "18. Logout", "request": { "method": "POST", "url": "{{baseUrl}}/auth/xero/logout" } }
+  ]
+}
