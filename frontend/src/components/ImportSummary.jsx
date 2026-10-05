@@ -1,19 +1,22 @@
 import React, { useState } from 'react';
 import { IconAlertTriangle, IconCheckCircle } from './icons.jsx';
 import StatusBadge from './StatusBadge.jsx';
+import Modal from './Modal.jsx';
 
 /**
  * Shows every auto-detected category from the uploaded file. FOUND
  * categories are ready immediately. NOT_FOUND ones show a "Continue
  * Import" action that creates the category in Xero (see
  * onResolveCategory) before they can be included in the overall import.
- * ARCHIVED categories are always blocked - never created over, never
- * offered an override.
+ * POSSIBLE_MISMATCH ones (a likely typo against an existing category)
+ * open a confirmation popup requiring an explicit choice - never silently
+ * assumed either way. ARCHIVED categories are always blocked - never
+ * created over, never offered an override.
  */
 export default function ImportSummary({ preflight, categories, onResolveCategory, onCancel, onStart, starting }) {
   const importable = categories.filter((c) => c.status === 'FOUND');
   const totalNew = importable.reduce((sum, c) => sum + (c.newOptionsCount ?? 0), 0);
-  const pendingCount = categories.filter((c) => c.status === 'NOT_FOUND').length;
+  const pendingCount = categories.filter((c) => c.status === 'NOT_FOUND' || c.status === 'POSSIBLE_MISMATCH').length;
 
   return (
     <div>
@@ -39,7 +42,7 @@ export default function ImportSummary({ preflight, categories, onResolveCategory
       <div className="flex items-center justify-between mt-6">
         <p className="text-sm text-ink-500">
           {importable.length} categor{importable.length === 1 ? 'y' : 'ies'} ready &middot; <span className="font-medium text-ink-900 tabular-nums">{totalNew}</span> new option{totalNew === 1 ? '' : 's'} total
-          {pendingCount > 0 && <span className="text-warning-700"> &middot; {pendingCount} still need{pendingCount === 1 ? 's' : ''} "Continue Import"</span>}
+          {pendingCount > 0 && <span className="text-warning-700"> &middot; {pendingCount} still need{pendingCount === 1 ? 's' : ''} your confirmation</span>}
         </p>
       </div>
 
@@ -65,14 +68,16 @@ export default function ImportSummary({ preflight, categories, onResolveCategory
 function CategoryCard({ category: c, onResolveCategory }) {
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
 
-  async function handleContinue() {
+  async function handleDecision(decision) {
     setResolving(true);
     setError(null);
     try {
-      await onResolveCategory(c.key);
+      await onResolveCategory(c.key, decision);
+      setModalOpen(false);
     } catch (err) {
-      setError(err.response?.data?.error?.message || 'Could not create this Tracking Category.');
+      setError(err.response?.data?.error?.message || 'Could not resolve this Tracking Category.');
     } finally {
       setResolving(false);
     }
@@ -120,17 +125,80 @@ function CategoryCard({ category: c, onResolveCategory }) {
 
       {c.status === 'NOT_FOUND' && (
         <div className="mt-3">
-          <Notice tone="warning" title="Tracking Category not found in Xero">
-            The application will create this Tracking Category automatically before importing the options.
+          {c.categoryLimitReached ? (
+            <Notice tone="danger" title="Xero Tracking Category limit reached">
+              This organisation already has {c.activeCategoryCount} active Tracking Categories, and Xero
+              allows a maximum of 2. "{c.categoryNameInFile}" cannot be created and will be skipped.
+            </Notice>
+          ) : (
+            <>
+              <Notice tone="warning" title="Tracking Category not found in Xero">
+                The application will create this Tracking Category automatically before importing the options.
+              </Notice>
+              {error && <p className="mt-2 text-sm text-danger-700">{error}</p>}
+              <button
+                onClick={() => handleDecision(undefined)}
+                disabled={resolving}
+                className="mt-3 px-4 py-2 rounded-lg bg-brand-700 text-white text-sm font-medium hover:bg-brand-800 disabled:opacity-50"
+              >
+                {resolving ? 'Creating category...' : 'Continue Import'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {c.status === 'POSSIBLE_MISMATCH' && (
+        <div className="mt-3">
+          <Notice tone="warning" title="Possible category name mismatch">
+            "{c.categoryNameInFile}" doesn't exactly match any Tracking Category in Xero, but "{c.suggestion.name}" is very
+            close - this is often a typo. Please choose how to proceed.
           </Notice>
-          {error && <p className="mt-2 text-sm text-danger-700">{error}</p>}
           <button
-            onClick={handleContinue}
-            disabled={resolving}
-            className="mt-3 px-4 py-2 rounded-lg bg-brand-700 text-white text-sm font-medium hover:bg-brand-800 disabled:opacity-50"
+            onClick={() => setModalOpen(true)}
+            className="mt-3 px-4 py-2 rounded-lg bg-brand-700 text-white text-sm font-medium hover:bg-brand-800"
           >
-            {resolving ? 'Creating category...' : 'Continue Import'}
+            Resolve mismatch
           </button>
+
+          <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Possible Tracking Category Mismatch">
+            <p className="text-sm text-ink-700">Your uploaded file contains:</p>
+            <p className="mt-1 font-medium text-ink-900">&ldquo;{c.categoryNameInFile}&rdquo;</p>
+            <p className="mt-3 text-sm text-ink-700">But Xero already has:</p>
+            <p className="mt-1 font-medium text-ink-900">&ldquo;{c.suggestion.name}&rdquo;</p>
+
+            {error && <p className="mt-3 text-sm text-danger-700">{error}</p>}
+
+            <div className="mt-5 space-y-3">
+              <button
+                onClick={() => handleDecision('use_existing')}
+                disabled={resolving}
+                className="w-full text-left px-4 py-3 rounded-lg border border-line hover:border-brand-300 hover:bg-brand-50 disabled:opacity-50 transition-colors"
+              >
+                <p className="font-medium text-ink-900">Use existing &ldquo;{c.suggestion.name}&rdquo;</p>
+                <p className="text-xs text-ink-500 mt-0.5">Import all options from this file into the existing &ldquo;{c.suggestion.name}&rdquo; Tracking Category.</p>
+              </button>
+
+              {c.categoryLimitReached ? (
+                <div className="w-full px-4 py-3 rounded-lg border border-line bg-ink-900/[.02]">
+                  <p className="font-medium text-ink-400">Create new &ldquo;{c.categoryNameInFile}&rdquo;</p>
+                  <p className="text-xs text-ink-400 mt-0.5">
+                    Not available - this organisation already has {c.activeCategoryCount} active Tracking Categories,
+                    and Xero allows a maximum of 2.
+                  </p>
+                </div>
+              ) : (
+                <button
+                  onClick={() => handleDecision('create_new')}
+                  disabled={resolving}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-line hover:border-brand-300 hover:bg-brand-50 disabled:opacity-50 transition-colors"
+                >
+                  <p className="font-medium text-ink-900">Create new &ldquo;{c.categoryNameInFile}&rdquo;</p>
+                  <p className="text-xs text-ink-500 mt-0.5">Create a new Tracking Category named &ldquo;{c.categoryNameInFile}&rdquo;.</p>
+                </button>
+              )}
+            </div>
+          </Modal>
         </div>
       )}
     </div>
@@ -141,6 +209,7 @@ function StatusPill({ status, wasCreated }) {
   if (status === 'FOUND' && wasCreated) return <span className="inline-flex items-center gap-1.5 text-success-700 text-sm font-medium"><IconCheckCircle /> Category created</span>;
   if (status === 'FOUND') return <span className="inline-flex items-center gap-1.5 text-success-700 text-sm font-medium"><IconCheckCircle /> Found in Xero</span>;
   if (status === 'ARCHIVED') return <StatusBadge status="ARCHIVED" />;
+  if (status === 'POSSIBLE_MISMATCH') return <span className="inline-flex items-center gap-1.5 text-warning-700 text-sm font-medium"><IconAlertTriangle /> Possible Mismatch</span>;
   return <span className="inline-flex items-center gap-1.5 text-warning-700 text-sm font-medium"><IconAlertTriangle /> Not Found</span>;
 }
 

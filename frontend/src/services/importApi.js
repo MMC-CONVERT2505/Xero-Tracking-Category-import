@@ -9,15 +9,31 @@ export async function validateUpload(file) {
   return data;
 }
 
-/** The "Continue Import" step for one NOT_FOUND category: finds-or-creates it in Xero. */
-export async function resolveCategory(uploadToken, key) {
-  const { data } = await api.post('/tracking/import/resolve-category', { uploadToken, key });
+/**
+ * The confirmation action for one unresolved category.
+ * - Plain "Continue Import" (NOT_FOUND, no similar category): call with no
+ *   `decision` - unchanged from before, still a single click, still
+ *   auto-creates.
+ * - A possible typo/mismatch (POSSIBLE_MISMATCH): `decision` is REQUIRED,
+ *   either 'use_existing' or 'create_new' - the backend rejects the call
+ *   without one rather than silently picking a side.
+ */
+export async function resolveCategory(uploadToken, key, decision) {
+  const { data } = await api.post('/tracking/import/resolve-category', { uploadToken, key, decision });
   return data.category;
 }
 
 export async function startImport(uploadToken) {
   const { data } = await api.post('/tracking/import/start', { uploadToken });
-  return data; // { jobs: [...], skipped: [...] }
+  return data; // { batchId, jobs: [...], skipped: [...] }
+}
+
+/** Aggregate progress across every category created from one multi-category upload. */
+export async function getBatchStatus(batchId) {
+  const { data } = await api.get(`/tracking/import/batch/${batchId}`, {
+    headers: { 'Cache-Control': 'no-cache' },
+  });
+  return data;
 }
 
 export async function listImports() {
@@ -55,4 +71,4 @@ export async function cancelImport(importId) {
   return data;
 }
 
-export default { validateUpload, startImport, listImports, getStatus, getErrorReport, retryFailed, resumeImport, cancelImport };
+export default { validateUpload, startImport, getBatchStatus, listImports, getStatus, getErrorReport, retryFailed, resumeImport, cancelImport };

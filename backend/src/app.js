@@ -1,13 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const sessionMiddleware = require('./middleware/session');
+const { requestContextMiddleware } = require('./middleware/requestContext');
 const authRoutes = require('./routes/authRoutes');
 const xeroRoutes = require('./routes/xeroRoutes');
 const trackingRoutes = require('./routes/trackingRoutes');
 const importRoutes = require('./routes/importRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5005';
 
 const app = express();
 
@@ -16,6 +17,9 @@ const app = express();
 app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
 app.use(sessionMiddleware);
+// TEMPORARY diagnostic plumbing - see middleware/requestContext.js. Purely
+// observational, changes nothing about how requests are routed/handled.
+app.use(requestContextMiddleware);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

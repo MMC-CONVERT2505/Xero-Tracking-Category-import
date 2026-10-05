@@ -32,10 +32,12 @@ export default function TrackingImport() {
     }
   }
 
-  // "Continue Import" for one NOT_FOUND category: creates it in Xero, then
-  // swaps that category's card into its resolved (FOUND) state.
-  async function handleResolveCategory(key) {
-    const resolved = await importApi.resolveCategory(preflight.uploadToken, key);
+  // "Continue Import" for a plain NOT_FOUND category (no decision needed,
+  // unchanged), or a decision ('use_existing'/'create_new') for a
+  // POSSIBLE_MISMATCH category. Either way, swaps that category's card
+  // into its resolved (FOUND) state once the backend confirms it.
+  async function handleResolveCategory(key, decision) {
+    const resolved = await importApi.resolveCategory(preflight.uploadToken, key, decision);
     setCategories((prev) => prev.map((c) => (c.key === key ? resolved : c)));
     toast.success(resolved.wasCreated ? `"${resolved.categoryName}" created in Xero.` : `"${resolved.categoryName}" resolved.`);
   }
@@ -43,7 +45,7 @@ export default function TrackingImport() {
   async function handleStart() {
     setStarting(true);
     try {
-      const { jobs, skipped } = await importApi.startImport(preflight.uploadToken);
+      const { batchId, jobs, skipped } = await importApi.startImport(preflight.uploadToken);
 
       if (skipped.length > 0) {
         toast.info(`Skipped ${skipped.length} categor${skipped.length === 1 ? 'y' : 'ies'} that weren't resolved yet: ${skipped.map((s) => s.categoryNameInFile).join(', ')}`);
@@ -53,8 +55,17 @@ export default function TrackingImport() {
         setStarting(false);
         return;
       }
-      toast.success(jobs.length === 1 ? 'Import started.' : `${jobs.length} imports started.`);
-      navigate(jobs.length === 1 ? `/imports/${jobs[0].importId}` : '/imports');
+      // Single category: identical to before - straight to its own progress
+      // page. Multiple categories: the new aggregate batch view, so the
+      // user can watch every category at once instead of picking one from
+      // history.
+      if (jobs.length === 1) {
+        toast.success('Import started.');
+        navigate(`/imports/${jobs[0].importId}`);
+      } else {
+        toast.success(`${jobs.length} imports started.`);
+        navigate(`/imports/batch/${batchId}`);
+      }
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'Could not start the import.');
       setStarting(false);

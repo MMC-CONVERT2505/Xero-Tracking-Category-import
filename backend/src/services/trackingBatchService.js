@@ -165,9 +165,9 @@ async function attemptOption(job, optionResult) {
     const parsed = parseXeroError(err);
 
     // Task 5: structured, token-free logging for every failed option -
-    // built only from parsed.* (httpStatus/messages/snippet), never from
-    // err.config (which is where the Authorization header lives), so a
-    // token can never end up in this log line even by accident.
+    // built only from parsed.* (httpStatus/messages/snippet/safe headers),
+    // never from err.config (which is where the Authorization header
+    // lives), so a token can never end up in this log line even by accident.
     // eslint-disable-next-line no-console
     console.error('[IMPORT_ERROR]', JSON.stringify({
       optionName: optionResult.displayName,
@@ -178,6 +178,13 @@ async function attemptOption(job, optionResult) {
       xeroErrorMessage: parsed.xeroMessage,
       xeroErrorDetails: parsed.xeroValidationMessages.length ? parsed.xeroValidationMessages : parsed.rawBodySnippet,
       attempt: attempts,
+      // Added for Issue 2 investigation: distinguishes "Xero responded but
+      // the body was empty" from "no response was ever received" from
+      // "got a response body we just don't recognize the shape of".
+      hasResponse: parsed.hasResponse,
+      bodyEmpty: parsed.bodyEmpty,
+      networkErrorCode: parsed.networkErrorCode,
+      xeroRateLimitHeaders: parsed.safeResponseHeaders,
     }));
 
     await store.saveOptionResult(job.importId, normalizedName, {

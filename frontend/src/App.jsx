@@ -12,6 +12,7 @@ import TrackingCategories from './pages/TrackingCategories.jsx';
 import TrackingCategoryDetail from './pages/TrackingCategoryDetail.jsx';
 import TrackingImport from './pages/TrackingImport.jsx';
 import ImportProgressPage from './pages/ImportProgressPage.jsx';
+import ImportBatchProgressPage from './pages/ImportBatchProgressPage.jsx';
 import ImportHistory from './pages/ImportHistory.jsx';
 import Connections from './pages/Connections.jsx';
 import Settings from './pages/Settings.jsx';
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/tracking-categories/import" element={<TrackingImport />} />
               <Route path="/tracking-categories/:trackingCategoryId" element={<TrackingCategoryDetail />} />
               <Route path="/imports" element={<ImportHistory />} />
+              <Route path="/imports/batch/:batchId" element={<ImportBatchProgressPage />} />
               <Route path="/imports/:importId" element={<ImportProgressPage />} />
               <Route path="/connections" element={<Connections />} />
               <Route path="/settings" element={<Settings />} />

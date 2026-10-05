@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const xeroAuthService = require('../services/xeroAuthService');
 const xeroConnectionService = require('../services/xeroConnectionService');
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5005';
 
 /** GET /auth/xero - "Connect Xero" button lands here and gets redirected to Xero's login. */
 function xeroLogin(req, res) {

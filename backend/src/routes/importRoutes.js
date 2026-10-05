@@ -10,6 +10,10 @@ router.get('/import', ctrl.list);
 router.post('/import/validate', upload.single('file'), ctrl.validate);
 router.post('/import/resolve-category', ctrl.resolveCategory);
 router.post('/import/start', ctrl.start);
+// Must be registered BEFORE /import/:importId - otherwise Express would
+// match "batch" itself as an :importId value and this route would never
+// be reached.
+router.get('/import/batch/:batchId', ctrl.batchStatus);
 router.get('/import/:importId', ctrl.status);
 router.get('/import/:importId/status', ctrl.status);
 router.get('/import/:importId/errors', ctrl.errors);

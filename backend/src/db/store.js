@@ -98,9 +98,6 @@ async function patchJob(importId, patch) {
   });
 }
 
-
-
-
 // ---------------------------------------------------------------------
 // Batches
 // ---------------------------------------------------------------------
@@ -111,8 +108,6 @@ async function saveBatches(importId, batches) {
     return batches;
   });
 }
-
-
 
 async function getBatches(importId) {
   const data = readJson(FILES.batches);
@@ -129,8 +124,6 @@ async function patchBatch(importId, batchNumber, patch) {
   });
 }
 
-
-
 // ---------------------------------------------------------------------
 // Per-option results (for error reports / idempotent re-runs)
 // ---------------------------------------------------------------------
@@ -141,7 +134,6 @@ async function saveOptionResult(importId, normalizedName, result) {
     return result;
   });
 }
-
 
 async function getOptionResults(importId) {
   const data = readJson(FILES.results);

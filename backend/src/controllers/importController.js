@@ -20,15 +20,17 @@ async function validate(req, res, next) {
 }
 
 /**
- * The "Continue Import" action for one NOT_FOUND category: finds-or-creates
- * it in Xero. If category creation fails, the error is returned as-is and
- * nothing is imported for that category (see trackingCategoryService).
+ * The confirmation action for one unresolved category. For a plain
+ * NOT_FOUND category this is "Continue Import" (no decision needed,
+ * unchanged auto-create). For a POSSIBLE_MISMATCH category (a likely typo
+ * against an existing category), `decision` is REQUIRED and must be
+ * 'use_existing' or 'create_new' - see trackingImportService.resolveCategory.
  */
 async function resolveCategory(req, res, next) {
   try {
-    const { uploadToken, key } = req.body;
+    const { uploadToken, key, decision } = req.body;
     if (!uploadToken || !key) return res.status(400).json({ error: { message: 'uploadToken and key are required.' } });
-    const category = await trackingImportService.resolveCategory(req.tenantId, uploadToken, key);
+    const category = await trackingImportService.resolveCategory(req.tenantId, uploadToken, key, decision);
     res.json({ category });
   } catch (err) {
     next(err);
@@ -67,6 +69,18 @@ async function status(req, res, next) {
     // of hitting the backend for the current persisted state.
     res.set('Cache-Control', 'no-store');
     res.json(job);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Aggregate view over every category job created from one multi-category upload. */
+async function batchStatus(req, res, next) {
+  try {
+    const batch = await trackingImportService.getBatchStatus(req.tenantId, req.params.batchId);
+    if (!batch) return res.status(404).json({ error: { message: 'Import batch not found.' } });
+    res.set('Cache-Control', 'no-store');
+    res.json(batch);
   } catch (err) {
     next(err);
   }
@@ -112,4 +126,4 @@ async function cancel(req, res, next) {
   }
 }
 
-module.exports = { validate, resolveCategory, start, list, status, errors, resume, retryFailed, cancel };
+module.exports = { validate, resolveCategory, start, list, status, batchStatus, errors, resume, retryFailed, cancel };

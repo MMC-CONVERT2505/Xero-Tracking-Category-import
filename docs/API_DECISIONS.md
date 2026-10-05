@@ -100,6 +100,117 @@ retry/persistence layers are agnostic to batch-vs-single-call.
   for hours even if the browser that started it is closed or the session
   cookie expires.
 
+## Diagnosing the dashboard 429 (and why option pushes were unaffected)
+
+`xeroClient.js` has four functions that call Xero, but only one of them -
+`createTrackingOption` - was ever rate-limited or retried. That protection
+lives OUTSIDE `xeroClient.js` entirely, in
+`trackingBatchService.attemptOption` (`rateLimiter.acquire` +
+`retryService.withRetry` wrapped around the call there). The other three -
+`listTrackingCategories`, `getTrackingCategory`, `createTrackingCategory` -
+had no protection at all. They're called from interactive requests
+(`GET /api/xero/dashboard`, `GET /api/xero/tracking-categories`, category
+resolution) that run independently of, and concurrently with, a large
+background import that's already consuming most of the tenant's Xero call
+budget through the (correctly) rate-limited option-creation path. When the
+combined traffic pushed the tenant over Xero's real per-minute limit, one
+of these *unprotected* calls could receive a genuine 429 straight from
+Xero, and - having no retry wrapper at all - the raw Axios error
+(`"Request failed with status code 429"`) propagated straight through
+`errorHandler.js` to the frontend. This is why no 429 ever appeared in the
+import's own batch logs: the import's calls were never the ones failing
+unprotected.
+
+**Fix**: `listTrackingCategories`, `getTrackingCategory`, and
+`createTrackingCategory` now go through the exact same, unmodified
+`rateLimiter`/`retryService` as option creation (via a new `callProtected()`
+wrapper in `xeroClient.js`), so all four functions draw from the same
+per-tenant budget and a transient 429/500 on any of them is absorbed by
+the same proven backoff logic instead of reaching the user.
+`createTrackingOption` itself is untouched - still wrapped only
+externally, exactly as before; verified in `test/smoke10_429_dashboard_fix.js`
+(Part A) by counting its raw attempt count directly at the `xeroClient`
+layer.
+
+**Temporary diagnostic logging** (`[XERO_CALL]` lines, in `xeroClient.js`'s
+`withDiagnostics()`) was added to every one of the four functions, safe to
+delete once no longer needed. Each line names which of our own routes
+triggered it (`"GET /api/xero/dashboard"`, or `"background-import"` for
+calls with no active request - via `middleware/requestContext.js`'s
+`AsyncLocalStorage`), the Xero method/path called, the status, and Xero's
+own rate-limit response headers (`X-MinLimit-Remaining`,
+`X-DayLimit-Remaining`, `X-AppMinLimit-Remaining`, `Retry-After`) - which
+only ever appear on responses that actually came from Xero's API gateway,
+making them the clearest signal for telling a genuine Xero rate limit
+apart from anything else. Only `err.response`/`res.headers` are ever read
+for this - never `err.config` (where Axios keeps the outgoing
+Authorization header) - so a token cannot end up in these lines; verified
+by injecting a uniquely-named fake token and asserting it never appears in
+any logged line.
+
+## Diagnosing a 500 with no error body (empty Xero response)
+
+`xeroErrorParser.js` originally only distinguished "has a `Message` field"
+from "doesn't" - a 500 with a genuinely empty response body (no JSON at
+all, e.g. from a gateway/load-balancer failure that never reached Xero's
+own application code, which is a well-known real-world case for
+transient 500s) fell through to `null` for every field, with no way to
+tell that apart from "we have a body but don't recognize its shape."
+
+The parser now explicitly distinguishes three cases, in order:
+1. **No response at all** (`err.response` doesn't exist - a timeout,
+   `ECONNRESET`, DNS failure, etc.) - the request may never have reached
+   Xero. Message: `"Xero request failed before a response was received (<code>)"`.
+2. **A response exists, but the body is empty** (`undefined`/`null`/blank
+   string/`{}`) - Xero's gateway responded, but there's no JSON error to
+   read. Message: `"Xero returned HTTP <status> with an empty response body"`
+   (exactly the wording requested for this case).
+3. **A response with an unrecognized non-JSON body** (HTML, plain text) -
+   a short, safe snippet of it is captured instead of nothing.
+
+All three cases, plus Xero's rate-limit headers, are included in both the
+per-option persisted `optionResult` and the `[IMPORT_ERROR]` structured
+log line, so a future empty-500-body failure is immediately distinguishable
+from a validation failure or a genuine network error without re-deriving
+any of this by hand.
+
+## Category typo/mismatch confirmation
+
+Reuses the Levenshtein-based `findClosestActiveCategory` helper (built in an
+earlier round for a "did-you-mean" suggestion, then unused when auto-create
+was requested instead) to gate auto-creation behind an explicit choice
+whenever a detected category is close enough to an existing one to plausibly
+be a typo, instead of always auto-creating on no exact match:
+
+- **Exact match** (case/whitespace-insensitive - "class" matches "Class"):
+  `FOUND`, unchanged from before.
+- **No exact match, no close match**: `NOT_FOUND`, unchanged from before -
+  a single "Continue Import" click, no decision required, auto-creates.
+- **No exact match, but a close match exists** among ACTIVE categories
+  (same threshold as before: edit distance <= `max(2, ceil(length * 0.25))`):
+  `POSSIBLE_MISMATCH`. `resolveCategory()` now REQUIRES an explicit
+  `decision` for this status - `'use_existing'` (reuses the suggested
+  category, never creates anything) or `'create_new'` (creates the name
+  EXACTLY as uploaded, never silently corrected to the suggestion). No
+  default: an unresolved mismatch simply cannot reach `startImport` - it's
+  skipped, same mechanism as any other not-yet-resolved category.
+- **Xero's real 2-active-category limit** is checked proactively at
+  classification time (not just when `resolveOrCreateCategory` itself
+  would reject it) so the UI can greatly out "Create new" with a clear
+  reason up front, while "Use existing" (a reuse, not a creation) still
+  works even at the limit.
+
+**Persistence**: the pre-confirmation state is deliberately NOT persisted
+beyond the existing in-memory `pendingUploads` map (documented at the top
+of `trackingImportService.js`) - nothing has been written to Xero yet at
+that point, so a restart simply invalidates the `uploadToken` and the user
+re-uploads. This is in fact the safest possible behaviour for "must not
+auto-create after a restart": there is no persisted intent to resume, so
+nothing can be created from stale state. Once a decision IS made, it flows
+straight into the same already-persisted, already-restart-proof `ImportJob`
+creation path every other category resolution uses - no separate
+persistence layer was added or needed.
+
 ## Category auto-detection & auto-creation
 
 The category is never typed or picked from a dropdown - it's read from the
@@ -112,13 +223,17 @@ and matched against the tenant's real Xero categories
   "create/import anyway" override for this case, anywhere in the API - see
   `test/smoke2.js`'s assertion that `resolveCategory` throws
   `CATEGORY_ARCHIVED` and the group never reaches `startImport`.
-- **No exact match** -> `NOT_FOUND` at preflight time. Nothing is created
-  yet - the Import Summary shows a **"Continue Import"** action per such
-  category. Only when the user clicks it does
-  `POST /api/tracking/import/resolve-category` call
-  `trackingCategoryService.resolveOrCreateCategory`, which re-checks Xero
-  one more time (inside a lock - see below) before actually creating
+- **No exact match, and nothing close enough to be a plausible typo** ->
+  `NOT_FOUND` at preflight time. Nothing is created yet - the Import
+  Summary shows a **"Continue Import"** action per such category. Only
+  when the user clicks it does `POST /api/tracking/import/resolve-category`
+  call `trackingCategoryService.resolveOrCreateCategory`, which re-checks
+  Xero one more time (inside a lock - see below) before actually creating
   anything, then flips that group to `FOUND` with `wasCreated: true`.
+- **No exact match, but something close enough to be a plausible typo** ->
+  `POSSIBLE_MISMATCH` instead of `NOT_FOUND` - see "Category
+  typo/mismatch confirmation" above for the explicit-choice flow this
+  triggers instead of auto-creating.
 - The client never sends a raw `trackingCategoryId` to resolve a category -
   only the opaque group `key` from `/validate`'s own response. The server
   looks up its own record of what that group is and resolves/creates the

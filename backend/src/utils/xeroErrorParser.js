@@ -17,11 +17,19 @@
  * ValidationException - the specific reason lives in
  * Elements[].ValidationErrors[].Message, which this module reads.
  *
- * For non-JSON bodies (e.g. a gateway-level 500 that never reaches Xero's
- * own application code and returns an HTML error page instead of Xero's
- * JSON), there is no `.Message` to read at all - this module captures a
- * short, non-sensitive snippet of the raw body instead of silently
- * falling back to Axios' generic message.
+ * For a response that HAS a status but no usable body at all (a common
+ * shape for upstream/gateway-level 500s - Xero's own app never even ran,
+ * so there's no JSON error to read), this is distinguished explicitly as
+ * "empty body" rather than silently falling back to a generic message.
+ * For a request that never got a response back at all (timeout, DNS,
+ * connection reset - `err.response` doesn't exist), that's distinguished
+ * too, since it means the request may not have reached Xero.
+ *
+ * Also reads Xero's documented rate-limit response headers
+ * (X-MinLimit-Remaining / X-DayLimit-Remaining / X-AppMinLimit-Remaining /
+ * Retry-After) - present only on responses that actually came from Xero's
+ * API gateway, which is exactly what makes them useful for telling a real
+ * Xero 429 apart from some other layer returning one.
  *
  * Deliberately reads ONLY response status/headers/data - never
  * err.config (which carries the Authorization header) - so there is no
@@ -30,10 +38,41 @@
 
 const RAW_BODY_SNIPPET_MAX_CHARS = 300;
 
+// Allowlist only - never log/forward headers wholesale, since that could
+// include Authorization on some misconfigured proxy response, or other
+// values we haven't vetted. Every header actually surfaced anywhere is
+// named explicitly, here and only here.
+const SAFE_RESPONSE_HEADERS = [
+  'retry-after',
+  'x-minlimit-remaining',
+  'x-daylimit-remaining',
+  'x-appminlimit-remaining',
+  'content-type',
+];
+
+function isEmptyBody(data) {
+  if (data === undefined || data === null) return true;
+  if (typeof data === 'string') return data.trim() === '';
+  if (typeof data === 'object' && !Buffer.isBuffer(data)) return Object.keys(data).length === 0;
+  return false;
+}
+
+function extractSafeHeaders(headers) {
+  const safe = {};
+  if (!headers) return safe;
+  for (const key of SAFE_RESPONSE_HEADERS) {
+    if (headers[key] !== undefined) safe[key] = headers[key];
+  }
+  return safe;
+}
+
 function parseXeroError(err) {
+  const hasResponse = !!err?.response;
   const httpStatus = err?.response?.status ?? null;
-  const retryAfterHeader = err?.response?.headers?.['retry-after'] ?? null;
+  const headers = extractSafeHeaders(err?.response?.headers);
+  const retryAfterHeader = headers['retry-after'] ?? null;
   const data = err?.response?.data;
+  const bodyEmpty = hasResponse ? isEmptyBody(data) : null;
 
   let xeroErrorType = null;
   let xeroErrorNumber = null;
@@ -41,7 +80,7 @@ function parseXeroError(err) {
   const xeroValidationMessages = [];
   let rawBodySnippet = null;
 
-  if (data && typeof data === 'object' && !Buffer.isBuffer(data)) {
+  if (!bodyEmpty && data && typeof data === 'object' && !Buffer.isBuffer(data)) {
     xeroErrorType = typeof data.Type === 'string' ? data.Type : null;
     xeroErrorNumber = typeof data.ErrorNumber === 'number' ? data.ErrorNumber : null;
     xeroMessage = typeof data.Message === 'string' ? data.Message : null;
@@ -55,7 +94,7 @@ function parseXeroError(err) {
         }
       }
     }
-  } else if (typeof data === 'string' && data.trim()) {
+  } else if (!bodyEmpty && typeof data === 'string') {
     // Non-JSON body (HTML error page, plain text, etc.) - capture a short,
     // safe snippet rather than nothing. Response bodies for failed
     // requests never contain the caller's own Authorization header, so
@@ -64,22 +103,34 @@ function parseXeroError(err) {
   }
 
   return {
+    hasResponse,
     httpStatus,
+    bodyEmpty,
     xeroErrorType,
     xeroErrorNumber,
     xeroMessage,
     xeroValidationMessages,
     retryAfter: retryAfterHeader != null ? String(retryAfterHeader) : null,
     rawBodySnippet,
-    friendlyMessage: buildFriendlyMessage({ httpStatus, xeroMessage, xeroErrorType, xeroValidationMessages, rawBodySnippet }),
+    safeResponseHeaders: headers,
+    networkErrorCode: !hasResponse ? (err?.code || null) : null,
+    friendlyMessage: buildFriendlyMessage({
+      hasResponse, httpStatus, bodyEmpty, xeroMessage, xeroErrorType, xeroValidationMessages, rawBodySnippet, networkErrorCode: !hasResponse ? (err?.code || null) : null,
+    }),
   };
 }
 
 /** The single string surfaced in the failed-options table / CSV export. */
-function buildFriendlyMessage({ httpStatus, xeroMessage, xeroErrorType, xeroValidationMessages, rawBodySnippet }) {
+function buildFriendlyMessage({ hasResponse, httpStatus, bodyEmpty, xeroMessage, xeroErrorType, xeroValidationMessages, rawBodySnippet, networkErrorCode }) {
   if (xeroValidationMessages.length > 0) return xeroValidationMessages.join('; ');
   if (xeroMessage) return xeroErrorType ? `${xeroMessage} (${xeroErrorType})` : xeroMessage;
   if (rawBodySnippet) return `Xero server error (HTTP ${httpStatus}): ${rawBodySnippet}`;
+  if (!hasResponse) {
+    return networkErrorCode
+      ? `Xero request failed before a response was received (${networkErrorCode})`
+      : 'Xero request failed before a response was received';
+  }
+  if (bodyEmpty) return `Xero returned HTTP ${httpStatus} with an empty response body`;
   if (httpStatus === 429) return 'Xero rate limit reached';
   if (httpStatus >= 500) return `Xero server error (HTTP ${httpStatus})`;
   if (httpStatus) return `Xero request failed (HTTP ${httpStatus})`;

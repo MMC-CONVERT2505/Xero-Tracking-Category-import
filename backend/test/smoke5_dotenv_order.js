@@ -20,7 +20,7 @@ const testEnvContent = [
   'XERO_CLIENT_ID=test-client-id-from-dotenv-file',
   'XERO_CLIENT_SECRET=test-secret-from-dotenv-file',
   `PORT=${PORT}`,
-  'FRONTEND_URL=http://localhost:5173',
+  'FRONTEND_URL=http://localhost:5005',
 ].join('\n');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }

@@ -97,7 +97,7 @@ backend/
     utils/xeroErrorParser.js      extracts Xero's real error detail from a failed request (see docs/API_DECISIONS.md)
     routes/        authRoutes.js, xeroRoutes.js, trackingRoutes.js, importRoutes.js
     controllers/   authController.js, xeroController.js, importController.js
-    middleware/    session.js, requireAuth.js, requireTenant.js, upload.js, errorHandler.js
+    middleware/    session.js, requireAuth.js, requireTenant.js, upload.js, errorHandler.js, requestContext.js (temporary Xero-call diagnostics)
 frontend/
   src/
     pages/          Login, OrganisationSelect, Dashboard, TrackingCategories,
@@ -133,10 +133,10 @@ npm start                   # http://localhost:7005
 ```bash
 cd frontend
 npm install
-npm run dev                 # http://localhost:5173 (proxies /api and /auth to :4000)
+npm run dev                 # http://localhost:5005 (proxies /api and /auth to :4000)
 ```
 
-Open `http://localhost:5173`, click **Connect Xero**, and log in with your
+Open `http://localhost:5005`, click **Connect Xero**, and log in with your
 Xero credentials. That's it - no tenant ID, no token, ever.
 
 > Note: `vite.config.js`'s dev proxy only forwards `/api`. Since `/auth/*`
@@ -308,6 +308,21 @@ without real credentials):
   injecting a fake bearer token into the simulated error's `err.config`
   (exactly where Axios keeps it) and grepping every log line and the full
   error report for it - that the token **never** appears anywhere.
+- **`smoke10_429_dashboard_fix.js`** - regression test for a real bug
+  (fixed): `listTrackingCategories`/`getTrackingCategory`/
+  `createTrackingCategory` had no rate-limit/retry protection at all, so
+  while a large import was consuming the tenant's Xero call budget through
+  the (correctly) protected option-creation path, an interactive call like
+  `GET /api/xero/dashboard` could get a genuine 429 straight from Xero and
+  propagate Axios' raw error straight to the frontend. Part A counts
+  `createTrackingOption`'s raw attempts directly at the `xeroClient` layer
+  to prove it is *not* now double-wrapped (still exactly 1 attempt there;
+  its retry still lives only in `trackingBatchService`, unchanged). Part B
+  calls the real `GET /api/xero/dashboard` route through the actual HTTP
+  server while Xero 429s the first two underlying attempts, and asserts
+  the response is a clean `200` - the 429 was absorbed by the same retry
+  logic, never reaching the frontend at all. Also asserts no token appears
+  in any of the new `[XERO_CALL]` diagnostic log lines.
 
 Run with `node test/<file>.js` from `backend/` (each resets `backend/data/`
 first).
